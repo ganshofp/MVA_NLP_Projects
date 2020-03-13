@@ -1,0 +1,116 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Include other packages here, before hyperref.
+
+% If you comment hyperref and then uncomment it, you should delete
+% egpaper.aux before re-running latex.  (Or just hit 'q' on the first latex
+% run, let it finish, and you should be clear).
+\usepackage[breaklinks=true,bookmarks=false]{hyperref}
+
+\cvprfinalcopy % *** Uncomment this line for the final submission
+
+\def\cvprPaperID{****} % *** Enter the CVPR Paper ID here
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+\usepackage[margin=2.2cm,top = 2cm, bottom = 2cm, includefoot]{geometry}
+
+% Pages are numbered in submission mode, and unnumbered in camera-ready
+%\ifcvprfinal\pagestyle{empty}\fi
+\setcounter{page}{1}
+\begin{document}
+
+%%%%%%%%% TITLE
+\title{Report TP2 - Construction of a Parser}
+
+\author{Philippe Ganshof\\
+ENS Paris-Saclay\\
+Cachan 94230 \\
+{\tt\small philippe.ganshof@hotmail.com}
+% For a paper whose authors are all at the same institution,
+% omit the following lines up until the closing ``}''.
+% Additional authors and addresses can be added with ``\and'',
+% just like the second author.
+% To save space, use either the email address or home page, not both
+}
+\maketitle
+
+
+
+
+\section{Introduction}
+We built in this practical work a parser for parsing sentences using the \textit{SEQUOIA tree bank v6.0} as our training dataset. Our system is divided in three main parts namely the PCFG, OOV and the CYK class. The role of the first model is to extract the grammar from the training corpus. OOV handles out-of-vocabulary words and we finally use the probabilistic CYK algorithm for parsing. %-------------------------------------------------------------------------
+
+
+\section{Extraction of PCFG}
+The first module \textit{pcfg.py} enables us in a first time to extract all the rules and words from the training corpus and assign to each of them a probability. These probabilities are stored in two dictionaries \textit{grammar} (G) and $\textit{inv\_lexicon}$ (L). More precisely, for each rule $X \rightarrow Y_{1}...Y_{n}$:
+$$ \text{G}[X][Y_{1}...Y_{n}] = \mathbb{P}(X  \rightarrow Y_{1}...Y_{n}) = \frac{C(X \rightarrow Y_{1}...Y_{n})}{C(X)} $$
+and for each word W with tag X:
+$$L[W][X] = \mathbb{P}(X \rightarrow W) = \frac{C(W)}{C(X \rightarrow W)} $$
+where $C$ defines the number of times a rule or a word appears in the training corpus. For that purpose, we designed a module $\textit{pcfg\_tree.py}$ to apply this process to a single sentence using a tree structure in order to walk around in the bracket form parsed sentence. It is then used by the function \textit{build\_pcfg} that builds $G$ and $L$ given a corpus of parsed sentences. Since the CYK only handles binary grammars, the module also contains a function \textit{to\_chomsky\_form} to transform $G$ in Chomsky normal form. The transformation consists of two steps. We first replace all rules with more than 2 children with a chain rule, carried out by the function \textit{to\_binary\_rules}. More precisely, each rule $X \rightarrow Y_{1}...Y_{n}$ with $n > 2$ becomes:
+$$ X \rightarrow Y_{1} \:\: Y_{2} | Y_{3}...Y_{n}, \:\:\:  Y_{2} | Y_{3}...Y_{n} \rightarrow Y_{3} \:\: Y_{4} | Y_{5}...Y_{n} $$
+$$,..., \:\: Y_{n-2} | Y_{n-1}  \rightarrow Y_{n-1} \:\: Y_{n}$$
+where $Y_{k} | Y_{k+1}...Y_{n}$, $k=1,...,n-2$ are new symbols and we assign a similar probability to all of them. We then remove all unites rules $X \rightarrow Y$ and create new rules by assigning $X$ to each child $Z$ of $Y$. We update the probability of the new rule $X \rightarrow Z$ by multiplying both $\mathbb{P}(X \rightarrow Y)$ and $\mathbb{P}(Y \rightarrow Z)$ which makes sense in terms of occurence. If $Y$ is terminal, we replace all rules containing the tag $X$ by the new symbol $X\&Y$.\par
+These artificial symbols are defined in this particular way to be able to retrieve the initial tags after we are done parsing. Finally, the \textit{pcfg} model also extracts additional information about the corpus such as the number of tags or words and their frequencies that turns out to be useful for computing the CYK algorithm.
+
+\section{OOV Words}
+To be able to parse sentences containing words that do not exists in the training corpus, we replace out-of-vocabulary words by the \textit{closest} word in the lexicon when using the CYK algorithm. The \textit{oov.py} module rightly takes care of finding this \textit{closest} word in the lexicon. But how do we choose it? In general, we would like the word in the lexicon to have the same tag (or list of tags) and a similar meaning than the out-of-vocabulary word.\par
+For that purpose, we used two different metrics. We first implemented the Levenshtein distance defining the minimum cost to transform a word M into P by carrying out only elementary operations such as insertion or deletion. Since there is a high chance for a random word to have Levenshtein distance less or equal than 2 with a word in the lexicon, we only consider candidates within edit distance 2. To distinguish candidates in the lexicon having the same Levenshtein distance from the word, we simply choose the word with the highest frequency. This is handled by \textit{closest\_word\_levi}.\par
+We also used the \textit{Polyglott embedding lexicon for French} to compare embedding similarity between words. Since not all words in the lexicon have an embedding, we created an embedding matrix only for those in the \textit{Polyglott Lexicon} with the function \textit{build\_embeddings\_lexicon}.\par
+Finally, given a query, the function \textit{closest\_word} returns the word in the lexicon with the closest embedding if the query is contained in the \textit{Polyglott Lexicon} and otherwise returns the word with the closest Levenshtein distance. In this setup, the Levenshtein distance is here to backup the embedding similarity in case the word is not contained in the \textit{Polyglott Lexicon}. This might define the simplest combination of both metrics but offers garanties.
+
+\section{Parsing with CYK}
+The previous parts has enabled us to apply the CYK algorithm to a random sentence and the module \textit{cyk.py} combines the previous parts for parsing the sentence.\par
+We implemented the probabilistic CYK algorithm that returns the most probable parsing tree among those that starts with \textit{SENT}, named \textit{CYK\_algorithm}. The function takes as input a sentence only containing words from the lexicon. It consists of recovering the probability of all possible substrings of the input string and taking the parsing tree with maximum probability. The algorithm is based on dynamic programming with the following recursion formula:\\
+$$ P[s,l,X] = \underset{0 \leqslant c \leqslant l-1, X \rightarrow Y \: Z}{\text{max}} P[X \rightarrow Y \: Z] $$
+$$\cdot P[s,c,Y] \cdot P[s + c + 1, l - c -1, Z]$$
+where $P[s,l,X]$ denotes the probability of the most likely parsed subsentence of length $l + 1 \in [1,n]$, starting at word position $s \in [0, n-l-1]$ with tag $X$.\par
+Since we add artificial tags to the PCFG when transforming it into Chomsky normal form, we also implemented a function for retrieving the initial tags. The algorithm takes as input  a parsed sentence (in bracket form) and clean all tags using a tree structure and the particular construction of the artificial tags. Finally, \textit{parse} combines everything and parse the sentence in the desired form.
+
+
+\section{Results and Discussion}
+We trained on the first 80\% of the sequoia corpus and tested on the last 10\% containing 310 sentences. We obtained a tagging accuracy of $91.2\%$ and our parser was able to parse 249 sentences. Our parser took approximatively 10 hours to parse all sentences and we believe that it can be significantly improved by optimising the efficiency of the code. Most of the sentences for which our parser was giving an obvious wrong parsing tree were essentially short sentences with proper names or dates. This is not surprising as proper names usually have a large Levenshtein distance from each other and so makes the tagging more difficult. To resolve this problem, we could build a specific model for detecting proper names.\par
+Words having a similar embedding in the \textit{Polyglott Lexicon} usually have a similar meaning but it does not necessarily means that they have the same tag. Words having both a small Levenshtein distance and a similar embedding have a much higher chance of having the same tag in general. Hence, another idea to improve the accuracy would be in the function \textit{closest\_word} not only to consider the word with the closest embedding but a set of candidates from both metrics and distinguish them by combining both metrics in a smart way.\par
+Finally, there does exists other algorithms than the CYK in the literature. For instance the LR \cite{1} is much faster and could lead to better results.
+
+
+
+
+
+\begin{thebibliography}{4}
+
+
+
+\bibitem{1}
+A. V. Aho and S. C. Johnson
+\newblock{ Lr parsing.ACM Comput. Surv., 6(2):99?124, June 1974.}
+
+\bibitem{2}
+Rami Al-Rfou, Bryan Perozzi, and Steven Skiena
+\newblock{Distributed word representations for multilingualnlp. InProceedings of the Seventeenth Conference on Computational Natural Language Learning, pages 183?192,Sofia, Bulgaria, August 2013. Association for Computational Linguistics.}
+
+\bibitem{3}
+T. Kasami
+\newblock{An efficient recognition and syntax analysis algorithm for context-free languages. Technical ReportAFCRL-65-758, Air Force Cambridge Research Laboratory, Bedford, MA?, 1965.}
+
+\bibitem{4}
+V. I. Levenshtein
+\newblock{Binary Codes Capable of Correcting Deletions, Insertions and Reversals.Soviet PhysicsDoklady, 10:707, February 1966.}
+ 
+
+\end{thebibliography}
+
+
+
+
+
+
+
+
+
+\end{document}
